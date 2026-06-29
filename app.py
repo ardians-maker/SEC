@@ -1,9 +1,14 @@
-from PIL import Image
-from deepface import DeepFace
-import numpy as np
+import streamlit as st
 import pandas as pd
+import numpy as np
 import pickle
 import ast
+import os
+import cv2
+from datetime import datetime
+from PIL import Image
+from scipy.spatial.distance import cosine
+from deepface import DeepFace
 
 # Konfigurasi Halaman
 st.set_page_config(page_title="Sistem Faskes Terpadu", page_icon="🏥", layout="wide")
@@ -32,19 +37,9 @@ def init_db(file_name, columns):
 
 init_db(DB_PASIEN, ['ID', 'Nama', 'Alamat', 'Face_Embedding'])
 init_db(DB_ANTRIAN, ['Tanggal', 'ID_Antrian', 'Nama_Pasien', 'Faskes', 'Jenis', 'Poli', 'Keluhan', 'Status_Rujukan', 'Status_Periksa'])
-# UPDATE: Penambahan kolom Nama_Dokter
 init_db(DB_DOKTER, ['Nama_Dokter', 'Username', 'Password', 'Faskes', 'Poli', 'Status_Praktek'])
 init_db(DB_REKAM_MEDIS, ['Tanggal', 'Nama_Pasien', 'Faskes', 'Diagnosis', 'Resep_Obat', 'Surat_Sakit', 'Rujukan_Tujuan'])
 init_db(DB_FASILITAS, ['Faskes', 'Kapasitas_Rawat_Inap', 'Terisi', 'Status_Penuh'])
-
-# ==========================================
-# 2. LOAD MODEL PENDETEKSI WAJAH (.pkl)
-# ==========================================
-from PIL import Image
-import ast
-from scipy.spatial.distance import cosine
-from deepface import DeepFace
-import cv2
 
 # ==========================================
 # 2. SISTEM EKSTRAKSI & VERIFIKASI WAJAH (DEEPFACE)
@@ -56,7 +51,7 @@ def ekstrak_fitur_wajah(image_buffer):
         image = Image.open(image_buffer).convert('RGB')
         img_np = np.array(image)
         
-        # 2. Ekstraksi menggunakan ArcFace dan RetinaFace (Persis seperti kode Colab Anda)
+        # 2. Ekstraksi menggunakan ArcFace dan RetinaFace
         res = DeepFace.represent(
             img_path=img_np,
             model_name="ArcFace",
@@ -93,8 +88,7 @@ def verifikasi_wajah(image_buffer):
         # Hitung jarak kemiripan
         jarak = cosine(fitur_login, fitur_terdaftar)
         
-        # Threshold standar ArcFace biasanya di angka 0.68. 
-        # Kita gunakan 0.5 agar sistem lebih ketat/aman untuk data medis.
+        # Threshold standar ArcFace. 0.5 agar sistem ketat.
         if jarak < 0.5:
             return True, row['Nama'], row['Alamat']
             
@@ -145,11 +139,14 @@ with tab_pasien:
                 st.error("Gagal: Mohon isi nama, alamat, dan ambil foto wajah.")
             else:
                 fitur = ekstrak_fitur_wajah(cam_daftar)
-                df = pd.read_excel(DB_PASIEN)
-                new_data = pd.DataFrame({'ID': [len(df)+1], 'Nama': [nama_input], 'Alamat': [alamat_input], 'Face_Embedding': [fitur]})
-                df = pd.concat([df, new_data], ignore_index=True)
-                df.to_excel(DB_PASIEN, index=False)
-                st.success(f"Berhasil: Pasien {nama_input} terdaftar. Silakan pindah ke menu Antrian.")
+                if fitur is None:
+                    st.error("Wajah tidak terdeteksi dengan jelas. Coba lagi.")
+                else:
+                    df = pd.read_excel(DB_PASIEN)
+                    new_data = pd.DataFrame({'ID': [len(df)+1], 'Nama': [nama_input], 'Alamat': [alamat_input], 'Face_Embedding': [fitur]})
+                    df = pd.concat([df, new_data], ignore_index=True)
+                    df.to_excel(DB_PASIEN, index=False)
+                    st.success(f"Berhasil: Pasien {nama_input} terdaftar. Silakan pindah ke menu Antrian.")
 
     elif menu_pasien == "Ambil Antrian Berobat" or menu_pasien == "Riwayat Rekam Medis & Resep":
         if not st.session_state.pasien_verified:
@@ -175,7 +172,6 @@ with tab_pasien:
                 with st.expander("Lihat Jadwal Dokter & Info Kamar Rawat Inap", expanded=False):
                     df_dok_view = pd.read_excel(DB_DOKTER)
                     if not df_dok_view.empty:
-                        # Menampilkan Nama Dokter di jadwal
                         st.dataframe(df_dok_view[['Faskes', 'Poli', 'Nama_Dokter', 'Status_Praktek']], use_container_width=True, hide_index=True)
                     df_fas_view = pd.read_excel(DB_FASILITAS)
                     if not df_fas_view.empty:
@@ -202,13 +198,8 @@ with tab_pasien:
                     if lanjut_antri:
                         df_antrian = pd.read_excel(DB_ANTRIAN)
     
-                        # PERBAIKAN 1: Ambil data antrian khusus untuk Faskes yang dipilih saja
                         df_faskes_ini = df_antrian[df_antrian['Faskes'] == faskes_pilih]
-    
-                        # PERBAIKAN 2: Nomor antrian dihitung hanya dari total pasien di Faskes tersebut
                         no_antrian = len(df_faskes_ini) + 1
-    
-                        # PERBAIKAN 3: Hitung jumlah orang yang belum diperiksa di Poli yang sama
                         antrian_sebelumnya = len(df_faskes_ini[(df_faskes_ini['Poli'] == layanan_pilih) & (df_faskes_ini['Status_Periksa'] == 'Belum')])
     
                         estimasi_menit = antrian_sebelumnya * 15
@@ -241,7 +232,6 @@ with tab_pasien:
 # TAB 2: ADMIN FASKES
 # ---------------------------------
 with tab_admin:
-    # UPDATE: Database Akun Admin untuk seluruh faskes
     akun_admin = {
         "admin_puskesmasA": {"pwd": "sehatceria123", "faskes": "Puskesmas A"},
         "admin_puskesmasB": {"pwd": "sehatceria123", "faskes": "Puskesmas B"},
@@ -261,7 +251,7 @@ with tab_admin:
             st.subheader("Login Sistem Administrasi")
             u_admin = st.text_input("Username Admin")
             p_admin = st.text_input("Password Admin", type="password")
-            if st.button("Login"):
+            if st.button("Login Admin"):
                 if u_admin in akun_admin and p_admin == akun_admin[u_admin]["pwd"]:
                     st.session_state.admin_logged_in = True
                     st.session_state.admin_faskes = akun_admin[u_admin]["faskes"]
@@ -314,7 +304,6 @@ with tab_admin:
             with col1:
                 st.markdown("**Pendaftaran Dokter Baru**")
                 with st.form("fdok"):
-                    # UPDATE: Input tambahan Nama Dokter
                     nama_dok = st.text_input("Nama Lengkap Dokter (Contoh: dr. Andi Sp.PD)")
                     u_dok = st.text_input("Username (Untuk Login Dokter)")
                     p_dok = st.text_input("Password", type="password")
@@ -366,7 +355,6 @@ with tab_dokter:
                 dok_match = df_dok[(df_dok['Username'] == u_login) & (df_dok['Password'] == p_login)]
                 if not dok_match.empty:
                     st.session_state.dokter_logged_in = True
-                    # Mengambil Nama Dokter langsung dari database (bukan username lagi)
                     st.session_state.nama_dokter = dok_match['Nama_Dokter'].values[0] 
                     st.session_state.faskes_dokter = dok_match['Faskes'].values[0]
                     st.rerun()
@@ -374,7 +362,6 @@ with tab_dokter:
                     st.error("Kredensial tidak valid.")
     else:
         col1, col2 = st.columns([4, 1])
-        # Akan memunculkan "Workspace Medis: dr. Budi" dsb
         col1.success(f"Workspace Medis: **{st.session_state.nama_dokter}** ({st.session_state.faskes_dokter})")
         if col2.button("Logout"):
             st.session_state.dokter_logged_in = False
@@ -402,7 +389,6 @@ with tab_dokter:
 
             st.markdown("### Pemeriksaan Saat Ini")
             
-            # Bersihkan nilai 'nan' pada status rujukan
             ruj_mentah = data_pilih['Status_Rujukan']
             ruj_bersih = "" if pd.isna(ruj_mentah) or str(ruj_mentah).lower() == 'nan' or str(ruj_mentah) == "" else f" {ruj_mentah}"
             
@@ -415,7 +401,6 @@ with tab_dokter:
                 surat_str = f"Istirahat {surat_sakit} Hari" if surat_sakit > 0 else "-"
                 
                 status_tindakan = st.radio("4. Tindakan Lanjutan", ["Selesai / Pulang", "Rujuk ke RS/Spesialis", "Rujuk Laboratorium Internal"])
-                # RS Rujukan mengambil data dari variabel DAFTAR_FASKES
                 rs_rujuk = st.selectbox("Pilih Faskes Rujukan (Bila Perlu)", ["-"] + DAFTAR_FASKES + ["Lab Darah", "Radiologi"])
                 
                 if st.form_submit_button("Simpan & Selesai"):
