@@ -170,12 +170,23 @@ with tab_pasien:
                 st.info(f"**Biodata Pasien:** {st.session_state.p_nama} ({st.session_state.p_alamat})")
                 
                 with st.expander("Lihat Jadwal Dokter & Info Kamar Rawat Inap", expanded=False):
+                    
+                    # --- TAMBAHAN KODE REAL-TIME KAMAR ---
+                    @st.fragment(run_every="5s")
+                    def live_kamar_pasien():
+                        df_fas_live = pd.read_excel(DB_FASILITAS)
+                        if not df_fas_live.empty:
+                            st.markdown("**🔴 Ketersediaan Kamar Saat Ini**")
+                            st.dataframe(df_fas_live, use_container_width=True, hide_index=True)
+                    # -------------------------------------
+
                     df_dok_view = pd.read_excel(DB_DOKTER)
                     if not df_dok_view.empty:
+                        st.markdown("**Jadwal Dokter**")
                         st.dataframe(df_dok_view[['Faskes', 'Poli', 'Nama_Dokter', 'Status_Praktek']], use_container_width=True, hide_index=True)
-                    df_fas_view = pd.read_excel(DB_FASILITAS)
-                    if not df_fas_view.empty:
-                        st.dataframe(df_fas_view, use_container_width=True, hide_index=True)
+                    
+                    # Memanggil fungsi kamar live
+                    live_kamar_pasien()
                 
                 faskes_pilih = st.selectbox("Pilih Faskes Tujuan", DAFTAR_FASKES)
                 jenis_pasien = st.radio("Jenis Pasien", ["Biasa", "Rujukan"])
@@ -268,10 +279,18 @@ with tab_admin:
             
         st.divider()
         menu_admin = st.radio("Navigasi:", ["Dashboard & Antrian", "Manajemen Fasilitas & Dokter"], horizontal=True)
-        
+
         if menu_admin == "Dashboard & Antrian":
             colL, colR = st.columns([1, 2])
             
+            # --- TAMBAHAN KODE REAL-TIME ADMIN ---
+            @st.fragment(run_every="5s")
+            def live_tabel_admin():
+                df_antri_live = pd.read_excel(DB_ANTRIAN)
+                df_ku_live = df_antri_live[df_antri_live['Faskes'] == admin_faskes]
+                st.dataframe(df_ku_live, use_container_width=True, hide_index=True)
+            # -------------------------------------
+
             df_antri = pd.read_excel(DB_ANTRIAN)
             df_ku = df_antri[df_antri['Faskes'] == admin_faskes]
             
@@ -297,7 +316,9 @@ with tab_admin:
                 else:
                     st.info("Semua antrian sudah terpanggil/kosong.")
                 
-                st.dataframe(df_ku, use_container_width=True, hide_index=True)
+                # Memanggil fungsi tabel live yang dibuat di atas
+                st.markdown("**🔴 Live Antrean (Auto-Update)**")
+                live_tabel_admin()
                 
         elif menu_admin == "Manajemen Fasilitas & Dokter":
             col1, col2 = st.columns(2)
@@ -353,9 +374,8 @@ with tab_dokter:
             if st.button("Masuk"):
                 df_dok = pd.read_excel(DB_DOKTER)
                 
-                # PERBAIKAN: Ubah kolom Username dan Password di Excel menjadi string (Teks)
+                # Menggunakan perbaikan string astype agar login angka tidak error
                 dok_match = df_dok[(df_dok['Username'].astype(str) == str(u_login)) & (df_dok['Password'].astype(str) == str(p_login))]
-                
                 if not dok_match.empty:
                     st.session_state.dokter_logged_in = True
                     st.session_state.nama_dokter = dok_match['Nama_Dokter'].values[0] 
@@ -370,34 +390,63 @@ with tab_dokter:
             st.session_state.dokter_logged_in = False
             st.rerun()
             
+        st.divider()
+
+        # ====================================================================
+        # FITUR REAL-TIME: Pantauan Live Ruang Tunggu Dokter (Auto-Update 5s)
+        # ====================================================================
+        with st.expander("🔴 Live Monitor Antrean Ruang Tunggu (Otomatis Diperbarui)", expanded=True):
+            @st.fragment(run_every="5s")
+            def live_antrean_dokter():
+                df_antri_live = pd.read_excel(DB_ANTRIAN)
+                # Filter antrean yang ada di faskes dokter ini dan statusnya belum selesai diperiksa
+                pasien_tunggu_live = df_antri_live[(df_antri_live['Faskes'] == st.session_state.faskes_dokter) & (df_antri_live['Status_Periksa'] != 'Selesai')]
+                
+                if pasien_tunggu_live.empty:
+                    st.caption("Tidak ada pasien di dalam antrean saat ini.")
+                else:
+                    # Menampilkan tabel ringkas status pasien terkini
+                    st.dataframe(
+                        pasien_tunggu_live[['ID_Antrian', 'Nama_Pasien', 'Poli', 'Jenis', 'Status_Periksa']], 
+                        use_container_width=True, 
+                        hide_index=True
+                    )
+            
+            # Jalankan fungsi fragment live monitor
+            live_antrean_dokter()
+        # ====================================================================
+        
+        st.subheader("Input Rekam Medis & Tindakan")
+        
+        # Sesi pembacaan data untuk form utama (tidak auto-refresh agar ketikan dokter aman)
         df_antrian_dok = pd.read_excel(DB_ANTRIAN)
         pasien_tunggu = df_antrian_dok[(df_antrian_dok['Faskes'] == st.session_state.faskes_dokter) & (df_antrian_dok['Status_Periksa'] != 'Selesai')]
         
         if pasien_tunggu.empty:
-            st.info("Bagus! Tidak ada antrian pasien saat ini.")
+            st.info("Tidak ada antrian pasien aktif untuk dipilih pada formulir.")
         else:
-            pilih_pasien = st.selectbox("Daftar Pasien di Ruang Tunggu:", pasien_tunggu['Nama_Pasien'].tolist())
+            pilih_pasien = st.selectbox("Pilih Pasien yang Akan Diperiksa Sekarang:", pasien_tunggu['Nama_Pasien'].tolist())
             data_pilih = pasien_tunggu[pasien_tunggu['Nama_Pasien'] == pilih_pasien].iloc[0]
             
             kel_mentah = data_pilih['Keluhan']
             keluhan_bersih = "-" if pd.isna(kel_mentah) or str(kel_mentah).lower() == 'nan' or str(kel_mentah) == "" else str(kel_mentah)
             
-            st.markdown(f"### Riwayat Rekam Medis - {pilih_pasien}")
+            st.markdown(f"#### Riwayat Kedatangan - {pilih_pasien}")
             df_rm_all = pd.read_excel(DB_REKAM_MEDIS)
             riwayat = df_rm_all[df_rm_all['Nama_Pasien'] == pilih_pasien]
             if riwayat.empty:
-                st.caption("Ini adalah kunjungan pertama pasien (Tidak ada riwayat).")
+                st.caption("Ini adalah kunjungan pertama pasien (Tidak ada riwayat rekam medis lama).")
             else:
                 st.dataframe(riwayat[['Tanggal', 'Faskes', 'Diagnosis', 'Resep_Obat']], use_container_width=True, hide_index=True)
 
-            st.markdown("### Pemeriksaan Saat Ini")
-            
+            st.markdown(f"#### Form Pemeriksaan Aktif")
             ruj_mentah = data_pilih['Status_Rujukan']
             ruj_bersih = "" if pd.isna(ruj_mentah) or str(ruj_mentah).lower() == 'nan' or str(ruj_mentah) == "" else f" {ruj_mentah}"
             
-            st.warning(f"**Keluhan:** {keluhan_bersih} | **Tipe:** {data_pilih['Jenis']}{ruj_bersih}")
+            st.warning(f"**Keluhan Saat Ini:** {keluhan_bersih} | **Tipe:** {data_pilih['Jenis']}{ruj_bersih} | **Status Antrean:** {data_pilih['Status_Periksa']}")
             
-            with st.form("form_pemeriksaan"):
+            # Form input medis dokter (Aman dari auto-refresh)
+            with st.form("form_pemeriksaan_utama"):
                 diagnosis = st.text_area("1. Catatan Rekam Medis / Diagnosis (Wajib)")
                 resep = st.text_area("2. E-Resep / Peresepan Obat (Format bebas)")
                 surat_sakit = st.number_input("3. Surat Keterangan Istirahat Sakit (Berapa Hari?)", min_value=0, max_value=30, value=0)
@@ -406,9 +455,9 @@ with tab_dokter:
                 status_tindakan = st.radio("4. Tindakan Lanjutan", ["Selesai / Pulang", "Rujuk ke RS/Spesialis", "Rujuk Laboratorium Internal"])
                 rs_rujuk = st.selectbox("Pilih Faskes Rujukan (Bila Perlu)", ["-"] + DAFTAR_FASKES + ["Lab Darah", "Radiologi"])
                 
-                if st.form_submit_button("Simpan & Selesai"):
+                if st.form_submit_button("Simpan Pemeriksaan & Selesaikan Antrean"):
                     if not diagnosis:
-                        st.error("Diagnosis medis wajib diisi.")
+                        st.error("Diagnosis medis wajib diisi sebelum menyimpan sesi!")
                     else:
                         tujuan = rs_rujuk if "Rujuk" in status_tindakan else "-"
                         df_rm = pd.read_excel(DB_REKAM_MEDIS)
@@ -419,9 +468,12 @@ with tab_dokter:
                         df_rm = pd.concat([df_rm, new_rm], ignore_index=True)
                         df_rm.to_excel(DB_REKAM_MEDIS, index=False)
                         
-                        idx_update = df_antrian_dok.index[(df_antrian_dok['Nama_Pasien'] == pilih_pasien) & (df_antrian_dok['Faskes'] == st.session_state.faskes_dokter)].tolist()[0]
-                        df_antrian_dok.at[idx_update, 'Status_Periksa'] = 'Selesai'
-                        df_antrian_dok.to_excel(DB_ANTRIAN, index=False)
+                        # Update status antrean pasien di Excel menjadi Selesai
+                        df_antrian_global = pd.read_excel(DB_ANTRIAN)
+                        idx_update = df_antrian_global.index[(df_antrian_global['Nama_Pasien'] == pilih_pasien) & (df_antrian_global['Faskes'] == st.session_state.faskes_dokter) & (df_antrian_global['Status_Periksa'] != 'Selesai')].tolist()
+                        if idx_update:
+                            df_antrian_global.at[idx_update[0], 'Status_Periksa'] = 'Selesai'
+                            df_antrian_global.to_excel(DB_ANTRIAN, index=False)
                         
-                        st.success("Pemeriksaan Selesai! Data Rekam Medis & E-Resep telah diterbitkan.")
+                        st.success("Sukses: Data rekam medis disimpan dan antrean diperbarui!")
                         st.rerun()
