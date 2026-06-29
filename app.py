@@ -40,29 +40,36 @@ init_db(DB_FASILITAS, ['Faskes', 'Kapasitas_Rawat_Inap', 'Terisi', 'Status_Penuh
 # ==========================================
 # 2. LOAD MODEL PENDETEKSI WAJAH (.pkl)
 # ==========================================
-@st.cache_resource
-def load_model():
-    with open('best_face_recognition_model.pkl', 'rb') as file:
-        return pickle.load(file)
+from PIL import Image
+import ast
+from scipy.spatial.distance import cosine
+from deepface import DeepFace
+import cv2
 
-face_model = load_model()
+# ==========================================
+# 2. SISTEM EKSTRAKSI & VERIFIKASI WAJAH (DEEPFACE)
+# ==========================================
 
 def ekstrak_fitur_wajah(image_buffer):
     try:
-        # Buka gambar dari kamera Streamlit
+        # 1. Buka gambar dari kamera Streamlit
         image = Image.open(image_buffer).convert('RGB')
         img_np = np.array(image)
         
-        # Ekstraksi dengan ArcFace (Harus sama dengan cara Anda melatih data)
+        # 2. Ekstraksi menggunakan ArcFace dan RetinaFace (Persis seperti kode Colab Anda)
         res = DeepFace.represent(
             img_path=img_np,
             model_name="ArcFace",
-            enforce_detection=True,
+            enforce_detection=True, # Wajib ada wajah
             detector_backend='retinaface'
         )
-        # Kembalikan vektor array murni
-        return res[0]["embedding"]
+        
+        # 3. Ambil vektor 512 dimensinya dan ubah ke string untuk masuk ke Excel
+        fitur = res[0]["embedding"]
+        return str(fitur)
+        
     except ValueError:
+        # Menangkap error jika RetinaFace tidak menemukan wajah di depan kamera
         return None 
 
 def verifikasi_wajah(image_buffer):
@@ -70,37 +77,28 @@ def verifikasi_wajah(image_buffer):
     if df.empty:
         return False, "", ""
     
-    # 1. Ekstrak vektor wajah
-    vektor_wajah = ekstrak_fitur_wajah(image_buffer)
-    if vektor_wajah is None:
-        st.error("Wajah tidak terdeteksi. Pastikan pencahayaan cukup.")
+    # 1. Ekstrak wajah orang yang sedang di depan kamera
+    fitur_login_str = ekstrak_fitur_wajah(image_buffer)
+    
+    if fitur_login_str is None:
+        st.error("Wajah tidak terdeteksi oleh sistem. Pastikan pencahayaan cukup.")
         return False, "", ""
+        
+    fitur_login = ast.literal_eval(fitur_login_str)
     
-    # 2. Ubah bentuk vektor menjadi 2D array (1 baris, 512 kolom) sesuai format Scikit-Learn
-    X_input = np.array(vektor_wajah).reshape(1, -1)
-    
-    # 3. Prediksi menggunakan model .pkl Anda
-    hasil_prediksi = face_model.predict(X_input)
-    
-    # Label prediksi (Bisa berupa angka 0,1,2 atau nama folder tergantung LabelEncoder Anda)
-    label_prediksi = hasil_prediksi[0] 
-    
-    # --- CATATAN PENTING ---
-    # Jika model Anda mengeluarkan angka (karena di-encode), Anda harus mengubahnya kembali ke teks.
-    # Contoh jika 0 adalah "Dian" dan 1 adalah "Budi":
-    # kamus_label = {0: "Dian Ardiansyah", 1: "Budi Santoso"}
-    # nama_ditebak = kamus_label.get(label_prediksi, "Tidak Dikenali")
-    
-    nama_ditebak = str(label_prediksi) # Asumsi model langsung mengeluarkan nama
-    
-    # 4. Cocokkan hasil prediksi model dengan database Excel
-    pasien_cocok = df[df['Nama'] == nama_ditebak]
-    
-    if not pasien_cocok.empty:
-        return True, pasien_cocok.iloc[0]['Nama'], pasien_cocok.iloc[0]['Alamat']
-    else:
-        # Jika model mengenali wajah, tapi namanya tidak ada di Excel
-        return False, "", ""
+    # 2. Bandingkan dengan database di Excel
+    for index, row in df.iterrows():
+        fitur_terdaftar = ast.literal_eval(row['Face_Embedding'])
+        
+        # Hitung jarak kemiripan
+        jarak = cosine(fitur_login, fitur_terdaftar)
+        
+        # Threshold standar ArcFace biasanya di angka 0.68. 
+        # Kita gunakan 0.5 agar sistem lebih ketat/aman untuk data medis.
+        if jarak < 0.5:
+            return True, row['Nama'], row['Alamat']
+            
+    return False, "", ""
 
 # ==========================================
 # 3. INISIALISASI SESSION STATE
