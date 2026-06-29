@@ -352,7 +352,10 @@ with tab_dokter:
             p_login = st.text_input("Password Dokter", type="password")
             if st.button("Masuk"):
                 df_dok = pd.read_excel(DB_DOKTER)
-                dok_match = df_dok[(df_dok['Username'] == u_login) & (df_dok['Password'] == p_login)]
+                
+                # PERBAIKAN: Ubah kolom Username dan Password di Excel menjadi string (Teks)
+                dok_match = df_dok[(df_dok['Username'].astype(str) == str(u_login)) & (df_dok['Password'].astype(str) == str(p_login))]
+                
                 if not dok_match.empty:
                     st.session_state.dokter_logged_in = True
                     st.session_state.nama_dokter = dok_match['Nama_Dokter'].values[0] 
