@@ -2,8 +2,7 @@ streamlit
 pandas
 openpyxl
 numpy
-scikit-learn
-opencv-python-headless
 deepface
-tensorflow-cpu
 tf-keras
+scipy
+opencv-python-headless
